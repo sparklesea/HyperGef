@@ -21,7 +21,12 @@ enum balan_met {
   hgnn_sn,
   hgnn_ef,
   hgnn_ef_full,
-  hgnn_merge
+  hgnn_merge,
+  gnn_edge_group,
+  gnn_sn,
+  gnn_ef,
+  gnn_ef_full,
+  gnn_merge
 };
 
 // balancer on GPU
@@ -31,6 +36,9 @@ public:
            SpMatCsrDescr_t<Index, DType> &H_t) {
     max_load_per = _max_load_per;
     hist.create(H.nrow + 1);
+    for(int i=0;i<H.nrow;++i){
+      printf("hist[%d]:%d\n", i, hist.d_array.get()[i]);
+    }
     hist_T.create(H.ncol + 1);
     hist.fill_zero_h();
     hist_T.fill_zero_h();
@@ -75,6 +83,8 @@ public:
       // analysis workload, generate histogram
       pre_analysis(nrow, ncol, A_indptr, A_indices, B_indptr, B_indices,
                    hist_darray, hist_T_darray);
+
+      // printf("hist darray:%d", hist_darray[0]);
 
       if (bm == balan_met::spmm_edge_group | bm == balan_met::spmm_hybrid) {
         key_len = edge_partition(nrow, A_indptr, hist_darray, key, group_row);
@@ -125,7 +135,9 @@ public:
   }
 
   int edge_partition(int nrow, const Index *A_indptr, Index *hist_darray,
-                     util::RamArray<Index> &gr, util::RamArray<Index> &kk) {
+                     util::RamArray<Index> &kk, util::RamArray<Index> &gr) {
+
+    // printf("hist darray[1]: %d", hist_darray[0]);
     thrust::device_vector<Index> d_hist(hist_darray, hist_darray + nrow + 1);
     thrust::device_vector<Index> hist_sum(d_hist.size());
     // prefix sum
@@ -183,6 +195,102 @@ private:
   util::RamArray<Index> hist;   // work load histogram
   util::RamArray<Index> hist_T; // work load histogram
   int node_merge_size;
+};
+
+// GNN spmm balancer on CPU
+template <typename Index, typename DType, balan_met bm> class gnn_balancer {
+public:
+  gnn_balancer(int _max_load_per, int H_nrow, int H_ncol, int H_nnz,
+                Index *H_csrptr, Index *H_colind, Index *H_t_csrptr,
+                Index *H_t_colind) {
+    max_load_per = _max_load_per;
+    process(H_nrow, H_ncol, H_nnz, H_csrptr, H_colind, H_t_csrptr, H_t_colind);
+  }
+  gnn_balancer(int _max_load_per, SpMatCsrDescr_t<Index, DType> &H,
+                SpMatCsrDescr_t<Index, DType> &H_t) {
+    max_load_per = _max_load_per;
+    process(H.nrow, H.ncol, H.nnz, H.sp_csrptr.h_array.get(),
+            H.sp_csrind.h_array.get(), H_t.sp_csrptr.h_array.get(),
+            H_t.sp_csrind.h_array.get());
+  }
+  ~gnn_balancer(){};
+  void process(const int nrow, const int ncol, int nnz, const Index *A_indptr,
+               const Index *A_indices, const Index *B_indptr,
+               const Index *B_indices) {
+    // analysis workload, generate histogram
+    std::vector<int> neighbor, work_prefix, work_twostep_prefix;
+    std::vector<int> mgcol, mgst; // merge
+
+    if (bm == balan_met::gnn_sn) {
+      gnn_sn_balance_cpu<int>(nrow, max_load_per, A_indptr, A_indices,
+                               B_indptr, B_indices, row, key, neighbor);
+      neighbor_key.create(neighbor.size(), neighbor);
+      neighbor_key.upload();
+    }
+    if (bm == balan_met::gnn_edge_group) {
+      gnn_eg_balance_cpu<int>(nrow, max_load_per, A_indptr, key, row);
+      gnn_eg_balance_cpu<int>(ncol, max_load_per, B_indptr, key_T, row_T);
+    }
+    // edge based fusion
+    if (bm == balan_met::gnn_ef) {
+      gnn_ef_balance_cpu<int>(ncol, max_load_per, B_indptr, key, row,
+                               work_prefix, work_twostep_prefix);
+      work_ind.create(work_prefix.size(), work_prefix);
+      work_ts_ind.create(work_twostep_prefix.size(), work_twostep_prefix);
+      work_ind.upload();
+      work_ts_ind.upload();
+    }
+    if (bm == balan_met::gnn_ef_full) {
+      gnn_ef_full_balance_cpu<int>(ncol, max_load_per, B_indptr, key, row,
+                                    group_st, group_ed);
+      group_start.create(group_st.size(), group_st);
+      group_end.create(group_ed.size(), group_ed);
+      group_start.upload();
+      group_end.upload();
+    }
+    if (bm == balan_met::gnn_merge) {
+      gnn_merge_cpu<int>(ncol, B_indptr, B_indices, key, row, mgcol);
+      merge_col.create(mgcol.size(), mgcol);
+    }
+
+    balan_row.create(row.size(), row);
+    balan_key.create(key.size(), key);
+    balan_row_T.create(row_T.size(), row_T);
+    balan_key_T.create(key_T.size(), key_T);
+
+    keys = row.size();
+    keys_T = row_T.size();
+    if (bm == balan_met::gnn_ef)
+    {
+      keys = work_twostep_prefix.back();
+      part_keys = work_prefix.back();
+    }
+    if (bm == balan_met::gnn_merge) {
+      keys = key.size() - 1;
+    }
+    if (bm == balan_met::gnn_ef_full) {
+      keys = group_st.size();
+      part_keys = key.size();
+    }
+    balan_row.upload();
+    balan_key.upload();
+    balan_row_T.upload();
+    balan_key_T.upload();    
+  }
+
+  int max_load_per; // finding how many tiles
+  std::vector<Index> row, key, row_T, key_T;
+  std::vector<Index> group_st, group_ed; // full
+  util::RamArray<Index> balan_row, balan_row_T;
+  util::RamArray<Index> balan_key, balan_key_T;
+  util::RamArray<Index> work_ind;
+  util::RamArray<Index> work_ts_ind;
+  util::RamArray<Index> neighbor_key;
+  util::RamArray<Index> merge_col;
+  util::RamArray<Index> group_start;
+  util::RamArray<Index> group_end;
+  int keys, keys_T;
+  int part_keys;
 };
 
 // [TODO] balancer on GPU need to fix, here use CPU replacement

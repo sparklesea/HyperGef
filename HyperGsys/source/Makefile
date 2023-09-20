@@ -20,3 +20,8 @@ $(TARGET): aggr_proto.o
 clean:
 	rm -f *.o $(TARGET)
 	$(RM) -rf $(TARGET) $(OBJ_DIR)
+
+test:
+	$(NVCC) $(INC) $(LL) spmm_test_cpu.cu -o spmm_test_cpu
+	$(NVCC) $(INC) $(LL) spmm_test_gpu.cu -o spmm_test_gpu
+

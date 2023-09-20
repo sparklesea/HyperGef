@@ -43,7 +43,7 @@ def get_extensions():
 
 install_requires = [
     "scipy",
-    "sklearn",
+    "scikit-learn",
     "torch"
 ]
 

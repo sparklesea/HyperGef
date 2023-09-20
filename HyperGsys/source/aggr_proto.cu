@@ -59,26 +59,7 @@ int main(int argc, char **argv) {
                                       tmp_feature, out_ref, out_feature))
     SpGEMM_SpMM_test<Index, DType>(fs, iter, feature_size, H, H_T, in_feature,
                                    out_feature);
-
-  printf("start fused kernel test\n");
-
-  if (HyperGAggr_check<Index, DType, hgnn_kernel_met::edge_based_fused, 2, 32>(
-          feature_size, H, H_T, in_feature, out_feature, out_ref))
-    HyperGAggr_test<Index, DType, hgnn_kernel_met::edge_based_fused, 2, 32>(
-        fs, ITER, feature_size, H, H_T, in_feature, out_feature);
-
-  int tune_list[30] = {4,   6,   10,  16,  20,  30,  40,  60,  80,  100, 120,
-                       150, 180, 210, 250, 300, 350, 400, 450, 500, -1};
-
-  HyperGAggr_tune<Index, DType, hgnn_kernel_met::edge_based_full,
-                  balan_met::hgnn_ef_full>(fs, tune_list, feature_size, H, H_T,
-                                           in_feature, out_feature, out_ref);
-
-  HyperGAggr_tune<Index, DType, hgnn_kernel_met::edge_based_shm,
-                  balan_met::hgnn_ef_full>(fs, tune_list, feature_size, H, H_T,
-                                           in_feature, out_feature, out_ref);
-
-  //   fs << time_ef_full_tune << "," << time_efshm_full_tune << "\n";
+                                   
   fs << "\n";
   fs.close();
   return 0;
