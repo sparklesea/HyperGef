@@ -13,7 +13,8 @@
 
 #define WARP_TILE 32
 
-enum balan_met {
+enum balan_met
+{
   none,
   spmm_edge_group,
   spmm_hybrid,
@@ -23,20 +24,20 @@ enum balan_met {
   hgnn_ef_full,
   hgnn_merge,
   gnn_edge_group,
-  gnn_sn,
-  gnn_ef,
-  gnn_ef_full,
-  gnn_merge
 };
 
 // balancer on GPU
-template <typename Index, typename DType, balan_met bm> class balancer {
+template <typename Index, typename DType, balan_met bm>
+class balancer
+{
 public:
   balancer(int _max_load_per, SpMatCsrDescr_t<Index, DType> &H,
-           SpMatCsrDescr_t<Index, DType> &H_t) {
+           SpMatCsrDescr_t<Index, DType> &H_t)
+  {
     max_load_per = _max_load_per;
     hist.create(H.nrow + 1);
-    for(int i=0;i<H.nrow;++i){
+    for (int i = 0; i < H.nrow; ++i)
+    {
       printf("hist[%d]:%d\n", i, hist.d_array.get()[i]);
     }
     hist_T.create(H.ncol + 1);
@@ -50,7 +51,8 @@ public:
   // pytorch interface
   balancer(int node_group_size, int _node_merge_size, int nrow, int ncol,
            int nnz, Index *H_csrptr, Index *H_csrind, Index *H_t_csrptr,
-           Index *H_t_csrind) {
+           Index *H_t_csrind)
+  {
     max_load_per = node_group_size;
     node_merge_size = _node_merge_size;
     hist.create(nrow + 1);
@@ -62,7 +64,8 @@ public:
   }
   balancer(int node_group_size, int _node_merge_size,
            SpMatCsrDescr_t<Index, DType> &H,
-           SpMatCsrDescr_t<Index, DType> &H_t) {
+           SpMatCsrDescr_t<Index, DType> &H_t)
+  {
     max_load_per = node_group_size;
     node_merge_size = _node_merge_size;
     hist.create(H.nrow + 1);
@@ -78,20 +81,24 @@ public:
   void process(int nrow, int ncol, int nnz, const Index *A_indptr,
                const Index *A_indices, const Index *B_indptr,
                const Index *B_indices, Index *hist_darray,
-               Index *hist_T_darray) {
-    if (bm == balan_met::spmm_edge_group | bm == balan_met::spmm_hybrid) {
+               Index *hist_T_darray)
+  {
+    if (bm == balan_met::spmm_edge_group | bm == balan_met::spmm_hybrid)
+    {
       // analysis workload, generate histogram
       pre_analysis(nrow, ncol, A_indptr, A_indices, B_indptr, B_indices,
                    hist_darray, hist_T_darray);
 
       // printf("hist darray:%d", hist_darray[0]);
 
-      if (bm == balan_met::spmm_edge_group | bm == balan_met::spmm_hybrid) {
+      if (bm == balan_met::spmm_edge_group | bm == balan_met::spmm_hybrid)
+      {
         key_len = edge_partition(nrow, A_indptr, hist_darray, key, group_row);
         key_len_T =
             edge_partition(ncol, B_indptr, hist_T_darray, key_T, group_row_T);
 
-        if (bm == balan_met::spmm_hybrid) {
+        if (bm == balan_met::spmm_hybrid)
+        {
           group_row_len = key_len;
           group_row_len_T = key_len_T;
           key_len = node_partition(nnz, key_len, key.d_array.get(), key_ptr);
@@ -105,8 +112,10 @@ public:
 
   void pre_analysis(int nrow, int ncol, const Index *A_indptr,
                     const Index *A_indices, const Index *B_indptr,
-                    const Index *B_indices, Index *hist, Index *hist_T) {
-    if (bm == balan_met::spmm_edge_group | bm == balan_met::spmm_hybrid) {
+                    const Index *B_indices, Index *hist, Index *hist_T)
+  {
+    if (bm == balan_met::spmm_edge_group | bm == balan_met::spmm_hybrid)
+    {
       spmm_edge_hist_kernel<Index><<<CEIL(nrow + 1, WARP_TILE), WARP_TILE>>>(
           max_load_per, nrow, A_indptr, hist);
       spmm_edge_hist_kernel<Index><<<CEIL(ncol + 1, WARP_TILE), WARP_TILE>>>(
@@ -117,7 +126,8 @@ public:
   // all_num : sum of histogram
   // hist_len : length of histogram
   int node_partition(int all_num, int hist_len, Index *hist,
-                     util::RamArray<Index> &key_tmp) {
+                     util::RamArray<Index> &key_tmp)
+  {
     int tile_num = CEIL(all_num, node_merge_size) + 1;
     key_tmp.create(tile_num);
     key_tmp.fill_zero_h();
@@ -135,7 +145,8 @@ public:
   }
 
   int edge_partition(int nrow, const Index *A_indptr, Index *hist_darray,
-                     util::RamArray<Index> &kk, util::RamArray<Index> &gr) {
+                     util::RamArray<Index> &kk, util::RamArray<Index> &gr)
+  {
 
     // printf("hist darray[1]: %d", hist_darray[0]);
     thrust::device_vector<Index> d_hist(hist_darray, hist_darray + nrow + 1);
@@ -198,112 +209,88 @@ private:
 };
 
 // GNN spmm balancer on CPU
-template <typename Index, typename DType, balan_met bm> class gnn_balancer {
+template <typename Index, typename DType, balan_met bm>
+class gnn_balancer
+{
 public:
   gnn_balancer(int _max_load_per, int H_nrow, int H_ncol, int H_nnz,
-                Index *H_csrptr, Index *H_colind, Index *H_t_csrptr,
-                Index *H_t_colind) {
+               Index *H_csrptr, Index *H_colind, Index *H_t_csrptr,
+               Index *H_t_colind)
+  {
     max_load_per = _max_load_per;
     process(H_nrow, H_ncol, H_nnz, H_csrptr, H_colind, H_t_csrptr, H_t_colind);
   }
   gnn_balancer(int _max_load_per, SpMatCsrDescr_t<Index, DType> &H,
-                SpMatCsrDescr_t<Index, DType> &H_t) {
+               SpMatCsrDescr_t<Index, DType> &H_t)
+  {
     max_load_per = _max_load_per;
     process(H.nrow, H.ncol, H.nnz, H.sp_csrptr.h_array.get(),
             H.sp_csrind.h_array.get(), H_t.sp_csrptr.h_array.get(),
             H_t.sp_csrind.h_array.get());
   }
+  gnn_balancer(int _max_load_per, SpMatCsrDescr_t<Index, DType> &H)
+  {
+    max_load_per = _max_load_per;
+    my_process(H.nrow, H.ncol, H.nnz, H.sp_csrptr.h_array.get());
+  }
   ~gnn_balancer(){};
   void process(const int nrow, const int ncol, int nnz, const Index *A_indptr,
                const Index *A_indices, const Index *B_indptr,
-               const Index *B_indices) {
+               const Index *B_indices)
+  {
     // analysis workload, generate histogram
     std::vector<int> neighbor, work_prefix, work_twostep_prefix;
     std::vector<int> mgcol, mgst; // merge
 
-    if (bm == balan_met::gnn_sn) {
-      gnn_sn_balance_cpu<int>(nrow, max_load_per, A_indptr, A_indices,
-                               B_indptr, B_indices, row, key, neighbor);
-      neighbor_key.create(neighbor.size(), neighbor);
-      neighbor_key.upload();
-    }
-    if (bm == balan_met::gnn_edge_group) {
+    if (bm == balan_met::gnn_edge_group)
+    {
       gnn_eg_balance_cpu<int>(nrow, max_load_per, A_indptr, key, row);
-      gnn_eg_balance_cpu<int>(ncol, max_load_per, B_indptr, key_T, row_T);
-    }
-    // edge based fusion
-    if (bm == balan_met::gnn_ef) {
-      gnn_ef_balance_cpu<int>(ncol, max_load_per, B_indptr, key, row,
-                               work_prefix, work_twostep_prefix);
-      work_ind.create(work_prefix.size(), work_prefix);
-      work_ts_ind.create(work_twostep_prefix.size(), work_twostep_prefix);
-      work_ind.upload();
-      work_ts_ind.upload();
-    }
-    if (bm == balan_met::gnn_ef_full) {
-      gnn_ef_full_balance_cpu<int>(ncol, max_load_per, B_indptr, key, row,
-                                    group_st, group_ed);
-      group_start.create(group_st.size(), group_st);
-      group_end.create(group_ed.size(), group_ed);
-      group_start.upload();
-      group_end.upload();
-    }
-    if (bm == balan_met::gnn_merge) {
-      gnn_merge_cpu<int>(ncol, B_indptr, B_indices, key, row, mgcol);
-      merge_col.create(mgcol.size(), mgcol);
     }
 
     balan_row.create(row.size(), row);
     balan_key.create(key.size(), key);
-    balan_row_T.create(row_T.size(), row_T);
-    balan_key_T.create(key_T.size(), key_T);
 
-    keys = row.size();
-    keys_T = row_T.size();
-    if (bm == balan_met::gnn_ef)
-    {
-      keys = work_twostep_prefix.back();
-      part_keys = work_prefix.back();
-    }
-    if (bm == balan_met::gnn_merge) {
-      keys = key.size() - 1;
-    }
-    if (bm == balan_met::gnn_ef_full) {
-      keys = group_st.size();
-      part_keys = key.size();
-    }
+    keys = key.size();
     balan_row.upload();
     balan_key.upload();
-    balan_row_T.upload();
-    balan_key_T.upload();    
+  }
+  void my_process(const int nrow, const int ncol, int nnz, const Index *A_indptr)
+  {
+    if (bm == balan_met::gnn_edge_group)
+    {
+      gnn_eg_balance_cpu<int>(nrow, max_load_per, A_indptr, key, row);
+    }
+
+    balan_row.create(row.size(), row);
+    balan_key.create(key.size(), key);
+
+    keys = key.size() - 1;
+    balan_row.upload();
+    balan_key.upload();
   }
 
   int max_load_per; // finding how many tiles
-  std::vector<Index> row, key, row_T, key_T;
-  std::vector<Index> group_st, group_ed; // full
-  util::RamArray<Index> balan_row, balan_row_T;
-  util::RamArray<Index> balan_key, balan_key_T;
-  util::RamArray<Index> work_ind;
-  util::RamArray<Index> work_ts_ind;
-  util::RamArray<Index> neighbor_key;
-  util::RamArray<Index> merge_col;
-  util::RamArray<Index> group_start;
-  util::RamArray<Index> group_end;
-  int keys, keys_T;
-  int part_keys;
+  std::vector<Index> row, key;
+  util::RamArray<Index> balan_row;
+  util::RamArray<Index> balan_key;
+  int keys;
 };
 
 // [TODO] balancer on GPU need to fix, here use CPU replacement
-template <typename Index, typename DType, balan_met bm> class hgnn_balancer {
+template <typename Index, typename DType, balan_met bm>
+class hgnn_balancer
+{
 public:
   hgnn_balancer(int _max_load_per, int H_nrow, int H_ncol, int H_nnz,
                 Index *H_csrptr, Index *H_colind, Index *H_t_csrptr,
-                Index *H_t_colind) {
+                Index *H_t_colind)
+  {
     max_load_per = _max_load_per;
     process(H_nrow, H_ncol, H_nnz, H_csrptr, H_colind, H_t_csrptr, H_t_colind);
   }
   hgnn_balancer(int _max_load_per, SpMatCsrDescr_t<Index, DType> &H,
-                SpMatCsrDescr_t<Index, DType> &H_t) {
+                SpMatCsrDescr_t<Index, DType> &H_t)
+  {
     max_load_per = _max_load_per;
     process(H.nrow, H.ncol, H.nnz, H.sp_csrptr.h_array.get(),
             H.sp_csrind.h_array.get(), H_t.sp_csrptr.h_array.get(),
@@ -312,22 +299,26 @@ public:
   ~hgnn_balancer(){};
   void process(const int nrow, const int ncol, int nnz, const Index *A_indptr,
                const Index *A_indices, const Index *B_indptr,
-               const Index *B_indices) {
+               const Index *B_indices)
+  {
     // analysis workload, generate histogram
     std::vector<int> neighbor, work_prefix, work_twostep_prefix;
     std::vector<int> mgcol, mgst; // merge
 
-    if (bm == balan_met::hgnn_sn) {
+    if (bm == balan_met::hgnn_sn)
+    {
       hgnn_sn_balance_cpu<int>(nrow, max_load_per, A_indptr, A_indices,
                                B_indptr, B_indices, row, key, neighbor);
       neighbor_key.create(neighbor.size(), neighbor);
       neighbor_key.upload();
     }
-    if (bm == balan_met::hgnn_eg) {
+    if (bm == balan_met::hgnn_eg)
+    {
       hgnn_eg_balance_cpu<int>(nrow, max_load_per, A_indptr, key, row);
     }
     // edge based fusion
-    if (bm == balan_met::hgnn_ef) {
+    if (bm == balan_met::hgnn_ef)
+    {
       hgnn_ef_balance_cpu<int>(ncol, max_load_per, B_indptr, key, row,
                                work_prefix, work_twostep_prefix);
       work_ind.create(work_prefix.size(), work_prefix);
@@ -335,7 +326,8 @@ public:
       work_ind.upload();
       work_ts_ind.upload();
     }
-    if (bm == balan_met::hgnn_ef_full) {
+    if (bm == balan_met::hgnn_ef_full)
+    {
       hgnn_ef_full_balance_cpu<int>(ncol, max_load_per, B_indptr, key, row,
                                     group_st, group_ed);
       group_start.create(group_st.size(), group_st);
@@ -343,7 +335,8 @@ public:
       group_start.upload();
       group_end.upload();
     }
-    if (bm == balan_met::hgnn_merge) {
+    if (bm == balan_met::hgnn_merge)
+    {
       hgnn_merge_cpu<int>(ncol, B_indptr, B_indices, key, row, mgcol);
       merge_col.create(mgcol.size(), mgcol);
     }
@@ -352,14 +345,17 @@ public:
     balan_key.create(key.size(), key);
 
     keys = row.size();
-    if (bm == balan_met::hgnn_ef) {
+    if (bm == balan_met::hgnn_ef)
+    {
       keys = work_twostep_prefix.back();
       part_keys = work_prefix.back();
     }
-    if (bm == balan_met::hgnn_merge) {
+    if (bm == balan_met::hgnn_merge)
+    {
       keys = key.size() - 1;
     }
-    if (bm == balan_met::hgnn_ef_full) {
+    if (bm == balan_met::hgnn_ef_full)
+    {
       keys = group_st.size();
       part_keys = key.size();
     }

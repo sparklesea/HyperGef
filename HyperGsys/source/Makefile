@@ -23,5 +23,5 @@ clean:
 
 test:
 	$(NVCC) $(INC) $(LL) spmm_test_cpu.cu -o spmm_test_cpu
-	$(NVCC) $(INC) $(LL) spmm_test_gpu.cu -o spmm_test_gpu
+	$(NVCC) $(INC) $(LL) sddmm_test_cpu.cu -o sddmm_test_cpu
 

@@ -511,7 +511,7 @@ csrspmm_edgegroup_kernel(const Index edge_groups, const Index feature_size,
   Index subwarp_id = threadIdx.y;
   Index group = blockIdx.x * group_tile + subwarp_id; // which node_group
   Index v_id = threadIdx.x;
-  if (group < edge_groups - 1)
+  if (group < edge_groups)
   {
     Index row = group_row[group]; // get the specific row of each node group
     dnInput += v_id;
@@ -801,25 +801,6 @@ float TwostepSpMM_test(std::fstream &fs, const int iter, int feature_size,
 }
 
 template <class Index, class DType>
-void TwostepSpMM_host_gnn(int feature_size, SpMatCsrDescr_t<Index, DType> &H,
-                          SpMatCsrDescr_t<Index, DType> &H_T,
-                          util::RamArray<DType> &in_feature,
-                          util::RamArray<DType> &tmp_feature,
-                          util::RamArray<DType> &out_ref)
-{
-  out_ref.reset();
-  tmp_feature.reset();
-  util::spmm_reference_host<Index, DType>(
-      H_T.nrow, feature_size, H_T.sp_csrptr.h_array.get(),
-      H_T.sp_csrind.h_array.get(), H_T.sp_data.h_array.get(),
-      in_feature.h_array.get(), tmp_feature.h_array.get());
-  util::spmm_reference_host<Index, DType>(
-      H.nrow, feature_size, H.sp_csrptr.h_array.get(),
-      H.sp_csrind.h_array.get(), H.sp_data.h_array.get(),
-      tmp_feature.h_array.get(), out_ref.h_array.get());
-}
-
-template <class Index, class DType>
 void TwostepSpMM_host(int feature_size, SpMatCsrDescr_t<Index, DType> &H,
                       SpMatCsrDescr_t<Index, DType> &H_T,
                       util::RamArray<DType> &in_feature,
@@ -936,39 +917,150 @@ bool TwostepSpMM_check(int feature_size, SpMatCsrDescr_t<Index, DType> &H,
         tmp_feature.d_array.get(), out_feature.d_array.get());
   }
   out_feature.download();
-  // bool pass = util::check_result(
-      // H.nrow, feature_size, out_feature.h_array.get(), out_ref.h_array.get());
-  // if (pass)
-  // {
-  //   printf("check passed!\n");
-  // }
-  // return pass;
-  return true;
+  bool pass = util::check_result(
+      H.nrow, feature_size, out_feature.h_array.get(), out_ref.h_array.get());
+  if (pass)
+  {
+    printf("check passed!\n");
+  }
+  return pass;
 }
 
-template <class Index, class DType, spmm_kernel_met km, balan_met bm>
-bool TwostepSpMM_check_cpu(int feature_size, SpMatCsrDescr_t<Index, DType> &H,
-                           SpMatCsrDescr_t<Index, DType> &H_T,
-                           gnn_balancer<Index, DType, bm> &balan,
-                           util::RamArray<DType> &in_feature,
-                           util::RamArray<DType> &tmp_feature,
-                           util::RamArray<DType> &out_feature,
-                           util::RamArray<DType> &out_ref)
+template <class Index, class DType>
+void TwostepSpMM_host_gnn(int feature_size, SpMatCsrDescr_t<Index, DType> &H,
+                          SpMatCsrDescr_t<Index, DType> &H_T,
+                          util::RamArray<DType> &in_feature,
+                          util::RamArray<DType> &tmp_feature,
+                          util::RamArray<DType> &out_ref)
+{
+  out_ref.reset();
+  tmp_feature.reset();
+  util::spmm_reference_host<Index, DType>(
+      H_T.nrow, feature_size, H_T.sp_csrptr.h_array.get(),
+      H_T.sp_csrind.h_array.get(), H_T.sp_data.h_array.get(),
+      in_feature.h_array.get(), tmp_feature.h_array.get());
+  util::spmm_reference_host<Index, DType>(
+      H.nrow, feature_size, H.sp_csrptr.h_array.get(),
+      H.sp_csrind.h_array.get(), H.sp_data.h_array.get(),
+      tmp_feature.h_array.get(), out_ref.h_array.get());
+}
+
+template <class Index, class DType>
+void SpMM_host(int feature_size, SpMatCsrDescr_t<Index, DType> &H,
+               util::RamArray<DType> &in_feature,
+               util::RamArray<DType> &out_ref)
+{
+  out_ref.reset();
+  util::spmm_reference_host<Index, DType>(
+      H.nrow, feature_size, H.sp_csrptr.h_array.get(),
+      H.sp_csrind.h_array.get(), H.sp_data.h_array.get(),
+      in_feature.h_array.get(), out_ref.h_array.get());
+}
+
+template <class Index, class DType, spmm_kernel_met km>
+float SpMM_test(std::fstream &fs, const int iter, int feature_size,
+                SpMatCsrDescr_t<Index, DType> &H,
+                util::RamArray<DType> &in_feature,
+                util::RamArray<DType> &out_feature)
+{
+  out_feature.reset();
+  util::gpuTimer atimer;
+  std::string method = "";
+  float compute_time = 0;
+  atimer.start();
+  if (km == spmm_kernel_met::row_balance)
+  {
+    for (int i = 0; i < iter; i++)
+    {
+      csrspmm_rowbalance<Index, DType>(H, feature_size,
+                                       in_feature.d_array.get(),
+                                       out_feature.d_array.get());
+    }
+    method += "row balance";
+  }
+  else if (km == spmm_kernel_met::edge_balance)
+  {
+    for (int i = 0; i < iter; i++)
+    {
+      csrspmm_edgebalance<Index, DType>(H, feature_size,
+                                        in_feature.d_array.get(),
+                                        out_feature.d_array.get());
+    }
+    method += "edge balance";
+  }
+  else if (km == spmm_kernel_met::cusparse)
+  {
+    compute_time += csrspmm_cusparse_test<Index, DType>(
+        iter, H, feature_size, in_feature.d_array.get(),
+        out_feature.d_array.get());
+    method += "cusparse";
+  }
+  atimer.end();
+  float report_time = (km == spmm_kernel_met::cusparse)
+                          ? (compute_time / iter)
+                          : (atimer.elapsed() / iter);
+
+  std::cout << "The time of " << method << " spmm " << report_time
+            << std::endl;
+  // fs << report_time << "," << 4 * feature_size * H.nnz * 1.0 / report_time /
+  // 1e6
+  //    << ",";
+  fs << report_time << ",";
+  return report_time;
+}
+
+// check device based on ref
+template <class Index, class DType, spmm_kernel_met km>
+bool SpMM_check(int feature_size, SpMatCsrDescr_t<Index, DType> &H,
+                util::RamArray<DType> &in_feature,
+                util::RamArray<DType> &out_feature,
+                util::RamArray<DType> &out_ref)
 {
   out_ref.reset();
   out_feature.reset();
-  tmp_feature.reset();
-  TwostepSpMM_host<Index, DType>(feature_size, H, H_T, in_feature, tmp_feature,
-                                 out_ref);
+  SpMM_host<Index, DType>(feature_size, H, in_feature, out_ref);
+  if (km == spmm_kernel_met::row_balance)
+  {
+    csrspmm_rowbalance<Index, DType>(H, feature_size, in_feature.d_array.get(), out_feature.d_array.get());
+  }
+  else if (km == spmm_kernel_met::edge_balance)
+  {
+    csrspmm_edgebalance<Index, DType>(
+        H, feature_size, in_feature.d_array.get(), out_feature.d_array.get());
+  }
+  else if (km == spmm_kernel_met::cusparse)
+  {
+    csrspmm_cusparse<Index, DType>(
+        H.nrow, H.ncol, H.nnz, feature_size, H.sp_csrptr.d_array.get(),
+        H.sp_csrind.d_array.get(), H.sp_data.d_array.get(),
+        in_feature.d_array.get(), out_feature.d_array.get());
+  }
+  out_feature.download();
+  bool pass = util::check_result(
+      H.nrow, feature_size, out_feature.h_array.get(), out_ref.h_array.get());
+  if (pass)
+  {
+    printf("check passed!\n");
+  }
+  return pass;
+}
+
+// check device based on ref
+template <class Index, class DType, spmm_kernel_met km, balan_met bm>
+bool SpMM_check(int feature_size, SpMatCsrDescr_t<Index, DType> &H,
+                gnn_balancer<Index, DType, bm> &balan,
+                util::RamArray<DType> &in_feature,
+                util::RamArray<DType> &out_feature,
+                util::RamArray<DType> &out_ref)
+{
+  out_ref.reset();
+  out_feature.reset();
+  SpMM_host<Index, DType>(feature_size, H, in_feature, out_ref);
   if (km == spmm_kernel_met::edge_group)
   {
     csrspmm_edgegroup<Index, DType>(
-        H_T, feature_size, balan.keys_T, balan.balan_key_T.d_array.get(),
-        balan.balan_row_T.d_array.get(), in_feature.d_array.get(),
-        tmp_feature.d_array.get());
-    csrspmm_edgegroup<Index, DType>(
         H, feature_size, balan.keys, balan.balan_key.d_array.get(),
-        balan.balan_row.d_array.get(), tmp_feature.d_array.get(),
+        balan.balan_row.d_array.get(), in_feature.d_array.get(),
         out_feature.d_array.get());
   }
   out_feature.download();
@@ -979,19 +1071,15 @@ bool TwostepSpMM_check_cpu(int feature_size, SpMatCsrDescr_t<Index, DType> &H,
     printf("check passed!\n");
   }
   return pass;
-  // return true;
 }
 
 template <class Index, class DType, spmm_kernel_met km, balan_met bm>
-void TwostepSpMM_test_cpu(std::fstream &fs, const int iter, int feature_size,
-                          SpMatCsrDescr_t<Index, DType> &H,
-                          SpMatCsrDescr_t<Index, DType> &H_T,
-                          gnn_balancer<Index, DType, bm> &balan,
-                          util::RamArray<DType> &in_feature,
-                          util::RamArray<DType> &tmp_feature,
-                          util::RamArray<DType> &out_feature)
+void SpMM_test(std::fstream &fs, const int iter, int feature_size,
+               SpMatCsrDescr_t<Index, DType> &H,
+               gnn_balancer<Index, DType, bm> &balan,
+               util::RamArray<DType> &in_feature,
+               util::RamArray<DType> &out_feature)
 {
-  tmp_feature.reset();
   out_feature.reset();
   util::gpuTimer atimer;
   std::string method = "";
@@ -1001,19 +1089,15 @@ void TwostepSpMM_test_cpu(std::fstream &fs, const int iter, int feature_size,
     for (int i = 0; i < iter; i++)
     {
       csrspmm_edgegroup<Index, DType>(
-          H_T, feature_size, balan.keys_T, balan.balan_key_T.d_array.get(),
-          balan.balan_row_T.d_array.get(), in_feature.d_array.get(),
-          tmp_feature.d_array.get());
-      csrspmm_edgegroup<Index, DType>(
           H, feature_size, balan.keys, balan.balan_key.d_array.get(),
-          balan.balan_row.d_array.get(), tmp_feature.d_array.get(),
+          balan.balan_row.d_array.get(), in_feature.d_array.get(),
           out_feature.d_array.get());
     }
     method += "edge group";
   }
   atimer.end();
   float time = atimer.elapsed() / iter;
-  std::cout << "The time of two " << method << " spmm " << time << std::endl;
+  std::cout << "The time of " << method << " spmm " << time << std::endl;
   // fs << time << "," << 4 * feature_size * H.nnz * 1.0 / time / 1e6 << ",";
   fs << time << ",";
 }
